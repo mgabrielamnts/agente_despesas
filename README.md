@@ -1,24 +1,48 @@
 # Agente de IA para Análise de Despesas
 
-Projeto de portfólio em Python que transforma descrições de gastos em linguagem natural em dados estruturados, persiste as despesas em banco relacional e gera análises mensais e alertas de anomalias.
+Projeto de portfólio em Python que usa uma interface conversacional para transformar linguagem natural em despesas estruturadas, persistir os dados em banco relacional e gerar análises mensais e alertas de anomalias.
 
 ## Funcionalidades
 
-- Entrada de despesas em português, como `gastei 45 reais no mercado ontem`.
+- Chat em português para registrar despesas naturalmente.
+- Coleta conversacional: se faltar valor, descrição ou data, o agente pergunta em vez de inventar.
+- Categorização automática a partir da descrição.
 - Extração estruturada com Claude e **tool use (function calling)**.
-- Validação em Python e confirmação manual antes de persistir.
+- Confirmação humana antes da persistência.
 - SQLAlchemy + SQLite, com `DATABASE_URL` preparada para evolução do banco.
 - Dashboard mensal com total, comparação com mês anterior e categorias.
 - Detecção estatística de gastos atípicos usando IQR.
-- Histórico, exclusão de despesas e testes unitários.
+- Histórico e exclusão de despesas.
+
+## Exemplo de conversa
+
+```text
+Usuário: Fui no McDonald's ontem.
+Agente: Quanto você gastou?
+Usuário: 38,90
+Agente: Encontrei esta despesa:
+        R$ 38,90 · Alimentação · McDonald's · ontem
+        [Confirmar e salvar] [Cancelar]
+```
+
+O estabelecimento é opcional. Valor, descrição e data precisam estar definidos antes da gravação.
 
 ## Arquitetura
 
 ```text
-Usuário -> Streamlit -> Claude/tool use -> validação -> repository -> SQLAlchemy -> SQLite
+Usuário -> Streamlit Chat -> Claude/tool use -> validação
                                       |
-                                      +-> Pandas -> insights/anomalias -> Streamlit
+                                      v
+                              confirmação humana
+                                      |
+                                      v
+                         repository -> SQLAlchemy -> SQLite
+                                      |
+                                      v
+                           Pandas -> insights/anomalias
 ```
+
+O modelo não grava diretamente no banco. Ele produz dados estruturados; o código Python valida, pede informações ausentes e somente chama a persistência após confirmação do usuário.
 
 ## Estrutura
 
@@ -40,24 +64,18 @@ agente_despesas/
 └── README.md
 ```
 
-## Decisões técnicas
-
-A aplicação separa interface, IA, persistência e analytics para reduzir acoplamento. A saída da IA é validada antes da gravação e o usuário pode revisar os campos. O texto original é mantido em `raw_text` para rastreabilidade.
-
-Para anomalias, foi escolhido IQR: dentro de cada categoria com histórico suficiente, gastos acima de `Q3 + 1,5 × IQR` são sinalizados. A abordagem é simples, estatística e explicável, sem adicionar Machine Learning sem necessidade.
-
 ## Como executar
 
 Requer Python 3.11+.
 
 ```bash
-python -m venv .venv
+python3 -m venv .venv
 source .venv/bin/activate
 pip install -r requirements.txt
 cp .env.example .env
 ```
 
-Preencha no `.env`:
+Configure no `.env`:
 
 ```env
 ANTHROPIC_API_KEY=sua_chave_real
@@ -70,22 +88,10 @@ Execute:
 streamlit run app.py
 ```
 
-O banco `data/expenses.db` é criado automaticamente e não é versionado.
-
 ## Testes
 
 ```bash
 pytest
-```
-
-## Exemplo
-
-Entrada: `almoço 32,50 hoje no ifood`.
-
-Saída estruturada esperada:
-
-```json
-{"amount":32.50,"category":"Alimentação","expense_date":"2026-10-01","description":"Almoço","establishment":"iFood"}
 ```
 
 ## Stack
@@ -94,4 +100,8 @@ Python · Anthropic SDK · SQLAlchemy · SQLite · Pandas · Streamlit · Pytest
 
 ## Próximas evoluções
 
-PostgreSQL/Alembic, metas por categoria, exportação CSV, filtros adicionais e mocks da API nos testes.
+1. Consultas conversacionais sobre os próprios gastos.
+2. Insights proativos e comparação entre categorias.
+3. Identificação de recorrências e assinaturas.
+4. Personalidades desacopladas da regra de negócio.
+5. Interface visual temática/pixel art e futura experiência mobile.
