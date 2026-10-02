@@ -1,42 +1,42 @@
 from datetime import date
-from anthropic import Anthropic
 
-from src.config import ANTHROPIC_API_KEY, ANTHROPIC_MODEL, CATEGORIES
+from google import genai
+
+from src.config import CATEGORIES, GEMINI_API_KEY, GEMINI_MODEL
 
 
 TOOL = {
+    "type": "function",
     "name": "analisar_despesa",
     "description": (
-        "Analisa uma despesa informada em conversa. Extraia somente informações "
-        "que o usuário realmente informou ou que possam ser resolvidas de forma "
-        "segura, como hoje e ontem. Use null quando uma informação estiver faltando."
+        "Estrutura os dados conhecidos de uma única despesa pessoal. "
+        "Campos desconhecidos devem ser omitidos."
     ),
-    "input_schema": {
+    "parameters": {
         "type": "object",
         "properties": {
-            "amount": {"type": ["number", "null"], "exclusiveMinimum": 0},
-            "category": {"type": ["string", "null"], "enum": CATEGORIES + [None]},
+            "amount": {
+                "type": "number",
+                "description": "Valor da despesa, maior que zero.",
+            },
+            "category": {
+                "type": "string",
+                "enum": CATEGORIES,
+                "description": "Categoria inferida a partir do gasto.",
+            },
             "expense_date": {
-                "type": ["string", "null"],
-                "description": "Data no formato YYYY-MM-DD ou null.",
+                "type": "string",
+                "description": "Data no formato YYYY-MM-DD.",
             },
             "description": {
-                "type": ["string", "null"],
+                "type": "string",
                 "description": "O que foi comprado ou tipo do gasto.",
             },
             "establishment": {
-                "type": ["string", "null"],
-                "description": "Estabelecimento apenas quando informado.",
+                "type": "string",
+                "description": "Estabelecimento somente quando informado.",
             },
         },
-        "required": [
-            "amount",
-            "category",
-            "expense_date",
-            "description",
-            "establishment",
-        ],
-        "additionalProperties": False,
     },
 }
 
@@ -112,43 +112,46 @@ def extract_expense_turn(
     if not text.strip():
         raise ExtractionError("Digite uma mensagem.")
 
-    if not ANTHROPIC_API_KEY:
-        raise ExtractionError("ANTHROPIC_API_KEY não configurada.")
-
-    if not ANTHROPIC_MODEL:
-        raise ExtractionError("ANTHROPIC_MODEL não configurado.")
+    if not GEMINI_API_KEY:
+        raise ExtractionError("GEMINI_API_KEY não configurada.")
 
     today = reference_date or date.today()
-    client = Anthropic(api_key=ANTHROPIC_API_KEY)
-
     context = previous_data or {}
+
     prompt = (
+        "Você ajuda a estruturar UMA despesa pessoal por vez em português do Brasil.\n"
+        f"A data de referência é {today.isoformat()}.\n"
         f"Dados já coletados: {context}\n"
-        f"Nova mensagem do usuário: {text}\n"
-        "Atualize a despesa com base na nova mensagem. "
-        "Preserve o sentido do que já foi informado e não invente dados."
+        f"Nova mensagem do usuário: {text}\n\n"
+        "Regras:\n"
+        "- Atualize a despesa usando a nova mensagem e os dados já coletados.\n"
+        "- Não invente valor, descrição, data ou estabelecimento.\n"
+        "- Resolva expressões explícitas como hoje e ontem usando a data de referência.\n"
+        "- A categoria pode ser inferida pela descrição, por exemplo almoço -> Alimentação.\n"
+        "- Estabelecimento é opcional.\n"
+        "- Omita da chamada os campos que ainda não são conhecidos.\n"
+        "- Chame analisar_despesa com os dados disponíveis."
     )
 
-    response = client.messages.create(
-        model=ANTHROPIC_MODEL,
-        max_tokens=500,
-        system=(
-            "Você ajuda a estruturar UMA despesa pessoal por vez em português do Brasil. "
-            f"A data de referência é {today.isoformat()}. "
-            "Resolva expressões explícitas como hoje e ontem usando essa data. "
-            "Não presuma valor, descrição, data ou estabelecimento quando não forem informados. "
-            "A categoria pode ser inferida a partir da descrição (ex.: almoço -> Alimentação). "
-            "Estabelecimento é opcional. "
-            "Use obrigatoriamente a ferramenta analisar_despesa."
-        ),
-        messages=[{"role": "user", "content": prompt}],
+    client = genai.Client(api_key=GEMINI_API_KEY)
+
+    interaction = client.interactions.create(
+        model=GEMINI_MODEL,
+        input=prompt,
         tools=[TOOL],
-        tool_choice={"type": "tool", "name": "analisar_despesa"},
+        generation_config={
+            "tool_choice": {
+                "allowed_tools": {
+                    "mode": "any",
+                    "tools": ["analisar_despesa"],
+                }
+            }
+        },
     )
 
-    for block in response.content:
-        if getattr(block, "type", None) == "tool_use" and block.name == "analisar_despesa":
-            current = _validate_partial(block.input)
+    for step in interaction.steps:
+        if step.type == "function_call" and step.name == "analisar_despesa":
+            current = _validate_partial(dict(step.arguments))
             return merge_expense_data(previous_data, current)
 
     raise ExtractionError("Não consegui interpretar a despesa. Tente novamente.")
