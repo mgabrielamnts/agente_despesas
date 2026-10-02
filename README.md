@@ -7,10 +7,10 @@ Projeto de portfólio em Python que usa uma interface conversacional para transf
 - Chat em português para registrar despesas naturalmente.
 - Coleta conversacional: se faltar valor, descrição ou data, o agente pergunta em vez de inventar.
 - Categorização automática a partir da descrição.
-- Extração estruturada com Claude e **tool use (function calling)**.
+- Extração estruturada com Gemini e **function calling**.
 - Confirmação humana antes da persistência.
-- SQLAlchemy + SQLite, com `DATABASE_URL` preparada para evolução do banco.
-- Dashboard mensal com total, comparação com mês anterior e categorias.
+- SQLAlchemy + SQLite.
+- Dashboard mensal com comparação ao mês anterior e categorias.
 - Detecção estatística de gastos atípicos usando IQR.
 - Histórico e exclusão de despesas.
 
@@ -30,39 +30,19 @@ O estabelecimento é opcional. Valor, descrição e data precisam estar definido
 ## Arquitetura
 
 ```text
-Usuário -> Streamlit Chat -> Claude/tool use -> validação
-                                      |
-                                      v
-                              confirmação humana
-                                      |
-                                      v
-                         repository -> SQLAlchemy -> SQLite
-                                      |
-                                      v
-                           Pandas -> insights/anomalias
+Usuário -> Streamlit Chat -> Gemini/function calling -> validação
+                                         |
+                                         v
+                                 confirmação humana
+                                         |
+                                         v
+                            repository -> SQLAlchemy -> SQLite
+                                         |
+                                         v
+                              Pandas -> insights/anomalias
 ```
 
-O modelo não grava diretamente no banco. Ele produz dados estruturados; o código Python valida, pede informações ausentes e somente chama a persistência após confirmação do usuário.
-
-## Estrutura
-
-```text
-agente_despesas/
-├── src/
-│   ├── config.py
-│   ├── database.py
-│   ├── models.py
-│   ├── extraction.py
-│   ├── repository.py
-│   └── insights.py
-├── tests/
-├── data/
-├── app.py
-├── .env.example
-├── .gitignore
-├── requirements.txt
-└── README.md
-```
+O modelo não grava diretamente no banco. Ele sugere uma chamada estruturada; o código Python valida os argumentos, identifica informações ausentes e somente persiste após confirmação do usuário.
 
 ## Como executar
 
@@ -78,8 +58,8 @@ cp .env.example .env
 Configure no `.env`:
 
 ```env
-ANTHROPIC_API_KEY=sua_chave_real
-ANTHROPIC_MODEL=nome_do_modelo_disponivel_na_sua_conta
+GEMINI_API_KEY=sua_chave_real
+GEMINI_MODEL=gemini-3.5-flash-lite
 ```
 
 Execute:
@@ -96,7 +76,7 @@ pytest
 
 ## Stack
 
-Python · Anthropic SDK · SQLAlchemy · SQLite · Pandas · Streamlit · Pytest
+Python · Gemini API / Google GenAI SDK · SQLAlchemy · SQLite · Pandas · Streamlit · Pytest
 
 ## Próximas evoluções
 
