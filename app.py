@@ -80,6 +80,18 @@ def br_date(value) -> str:
     return value.strftime("%d/%m/%Y")
 
 
+CATEGORY_ICONS = {
+    "Alimentação": "🍽️", "Mercado": "🛒", "Transporte": "🚗",
+    "Moradia": "🏠", "Contas pessoais": "🧾", "Saúde": "💊",
+    "Educação": "📚", "Lazer": "🎬", "Compras": "🛍️",
+    "Assinaturas": "🔁", "Financeiro": "💳", "Outros": "📌",
+}
+
+
+def category_label(category: str) -> str:
+    return f"{CATEGORY_ICONS.get(category, '📌')} {category}"
+
+
 def render_expense_form(
     form_key: str,
     amount: float,
@@ -379,8 +391,7 @@ with tab_dashboard:
         info = annual_insights(df, year, selected_category)
         statement = filter_expenses_by_year(df, year, selected_category)
 
-    m1, m2, m3 = st.columns(3)
-
+    # O total do período é o indicador principal; comparações ficam como contexto.
     if view_mode == "Mensal" and len(selected_months) == 1:
         month_info = monthly_insights(df, year, selected_months[0], selected_category)
         delta = (
@@ -388,23 +399,25 @@ with tab_dashboard:
             if month_info["variation_pct"] is None
             else f"{month_info['variation_pct']:+.1f}% vs. mês anterior"
         )
-        m1.metric("Total do período", money(info["total"]), delta=delta)
-        m2.metric("Mês anterior", money(month_info["previous_total"]))
+        total_label = "Total do período"
     elif view_mode == "Anual":
         delta = (
             None
             if info["variation_pct"] is None
             else f"{info['variation_pct']:+.1f}% vs. ano anterior"
         )
-        m1.metric("Total no ano", money(info["total"]), delta=delta)
-        m2.metric("Ano anterior", money(info["previous_total"]))
+        total_label = "Total no ano"
     else:
-        m1.metric("Total do período", money(info["total"]))
-        m2.metric("Meses selecionados", len(selected_months))
+        delta = None
+        total_label = "Total do período"
 
-    m3.metric(
+    main_metric, category_metric = st.columns([2, 1])
+    main_metric.metric(total_label, money(info["total"]), delta=delta)
+    category_metric.metric(
         "Categoria selecionada" if selected_category else "Categoria com maior gasto",
-        selected_category or info["top_category"] or "Sem dados",
+        category_label(selected_category or info["top_category"])
+        if (selected_category or info["top_category"])
+        else "Sem dados",
     )
 
     if view_mode == "Anual":
@@ -418,25 +431,7 @@ with tab_dashboard:
     if not info["by_category"].empty:
         st.subheader("Gastos por categoria")
         st.bar_chart(info["by_category"])
-
-    st.subheader("Extrato detalhado")
-    if statement.empty:
-        st.info("Nenhuma despesa encontrada para os filtros selecionados.")
-    else:
-        detail = statement[
-            ["data", "categoria", "descricao", "estabelecimento", "valor"]
-        ].copy()
-        detail["data"] = detail["data"].dt.strftime("%d/%m/%Y")
-        detail["descricao"] = detail["descricao"].str.strip().str.capitalize()
-        detail["estabelecimento"] = detail["estabelecimento"].fillna("—")
-        detail = detail.rename(columns={
-            "data": "Data", "categoria": "Categoria", "descricao": "Descrição",
-            "estabelecimento": "Estabelecimento", "valor": "Valor (R$)",
-        })
-        st.dataframe(
-            detail, use_container_width=True, hide_index=True,
-            column_config={"Valor (R$)": st.column_config.NumberColumn(format="R$ %.2f")},
-        )
+        st.caption("Quer ver os lançamentos? Use os mesmos filtros na aba Histórico.")
 
     st.subheader("⚠️ Gastos fora do padrão")
     all_anomalies = detect_anomalies(df)
@@ -501,47 +496,118 @@ with tab_dashboard:
                     st.rerun()
 
 with tab_history:
+    st.subheader("Lançamentos")
+    st.caption("Pesquise, filtre, edite ou exclua despesas registradas.")
+
     if df.empty:
         st.info("Nenhuma despesa registrada.")
     else:
-        display = df.sort_values("data", ascending=False).copy()
-        display["data"] = display["data"].dt.strftime("%d/%m/%Y")
-        display["descricao"] = display["descricao"].str.strip().str.capitalize()
-        display["estabelecimento"] = display["estabelecimento"].fillna("—")
-        st.dataframe(display, use_container_width=True, hide_index=True)
+        h1, h2, h3 = st.columns(3)
+        history_year = int(
+            h1.number_input("Ano", 2020, 2100, date.today().year, key="history_year")
+        )
+        history_months = h2.multiselect(
+            "Meses",
+            options=list(month_names),
+            default=list(month_names),
+            format_func=lambda month_number: month_names[month_number],
+            key="history_months",
+        )
+        history_category_option = h3.selectbox(
+            "Categoria", ["Todas"] + CATEGORIES, key="history_category"
+        )
+        history_category = (
+            None if history_category_option == "Todas" else history_category_option
+        )
+        search_text = st.text_input(
+            "🔎 Buscar",
+            placeholder="Descrição ou estabelecimento...",
+            key="history_search",
+        ).strip()
 
-        ids = [expense.id for expense in expenses]
-        selected_id = st.selectbox(
-            "Selecione uma despesa",
-            [None] + ids,
-            format_func=lambda value: "Selecionar..." if value is None else f"Despesa #{value}",
+        history_df = filter_expenses_by_months(
+            df, history_year, history_months, history_category
         )
 
-        if selected_id is not None:
-            selected = next(expense for expense in expenses if expense.id == selected_id)
-            action_edit, action_delete = st.columns(2)
-
-            if action_edit.button("✏️ Editar despesa", use_container_width=True):
-                st.session_state.history_edit_id = selected_id
-
-            if action_delete.button("🗑️ Excluir despesa", use_container_width=True):
-                delete_expense(selected_id)
-                st.success("Despesa excluída.")
-                st.rerun()
-
-            if st.session_state.get("history_edit_id") == selected_id:
-                st.subheader("Editar despesa")
-                history_data = render_expense_form(
-                    form_key="history_edit_form",
-                    amount=float(selected.amount),
-                    category=selected.category,
-                    expense_date=selected.expense_date,
-                    description=selected.description,
-                    establishment=selected.establishment,
-                    submit_label="Salvar alterações",
+        if search_text and not history_df.empty:
+            search_normalized = search_text.casefold()
+            description_match = (
+                history_df["descricao"].fillna("").str.casefold().str.contains(
+                    search_normalized, regex=False
                 )
-                if history_data:
-                    update_expense(selected_id, history_data)
+            )
+            establishment_match = (
+                history_df["estabelecimento"].fillna("").str.casefold().str.contains(
+                    search_normalized, regex=False
+                )
+            )
+            history_df = history_df[description_match | establishment_match].copy()
+
+        if history_df.empty:
+            st.info("Nenhum lançamento encontrado para esses filtros.")
+        else:
+            display = history_df[
+                ["id", "data", "categoria", "descricao", "estabelecimento", "valor"]
+            ].copy()
+            display["data"] = display["data"].dt.strftime("%d/%m/%Y")
+            display["categoria"] = display["categoria"].map(category_label)
+            display["descricao"] = display["descricao"].str.strip().str.capitalize()
+            display["estabelecimento"] = display["estabelecimento"].fillna("—")
+            display = display.rename(columns={
+                "id": "ID",
+                "data": "Data",
+                "categoria": "Categoria",
+                "descricao": "Descrição",
+                "estabelecimento": "Estabelecimento",
+                "valor": "Valor (R$)",
+            })
+            st.dataframe(
+                display,
+                use_container_width=True,
+                hide_index=True,
+                column_config={
+                    "Valor (R$)": st.column_config.NumberColumn(format="R$ %.2f")
+                },
+            )
+
+            visible_ids = history_df["id"].astype(int).tolist()
+            selected_id = st.selectbox(
+                "Selecione um lançamento para gerenciar",
+                [None] + visible_ids,
+                format_func=lambda value: (
+                    "Selecionar..." if value is None else f"Despesa #{value}"
+                ),
+                key="history_selected_id",
+            )
+
+            if selected_id is not None:
+                selected = next(
+                    expense for expense in expenses if expense.id == selected_id
+                )
+                action_edit, action_delete = st.columns(2)
+
+                if action_edit.button("✏️ Editar despesa", use_container_width=True):
+                    st.session_state.history_edit_id = selected_id
+
+                if action_delete.button("🗑️ Excluir despesa", use_container_width=True):
+                    delete_expense(selected_id)
                     st.session_state.pop("history_edit_id", None)
-                    st.success("Despesa atualizada.")
+                    st.success("Despesa excluída.")
                     st.rerun()
+
+                if st.session_state.get("history_edit_id") == selected_id:
+                    st.subheader("Editar despesa")
+                    history_data = render_expense_form(
+                        form_key=f"history_edit_form_{selected_id}",
+                        amount=float(selected.amount),
+                        category=selected.category,
+                        expense_date=selected.expense_date,
+                        description=selected.description,
+                        establishment=selected.establishment,
+                        submit_label="Salvar alterações",
+                    )
+                    if history_data:
+                        update_expense(selected_id, history_data)
+                        st.session_state.pop("history_edit_id", None)
+                        st.success("Despesa atualizada.")
+                        st.rerun()
