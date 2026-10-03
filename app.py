@@ -11,7 +11,7 @@ from src.extraction import (
     missing_fields,
     question_for_missing,
 )
-from src.insights import detect_anomalies, expenses_to_dataframe, monthly_insights
+from src.insights import detect_anomalies, expenses_to_dataframe, filter_expenses, monthly_insights
 from src.repository import add_expense, delete_expense, list_expenses, update_expense
 
 
@@ -148,26 +148,80 @@ df = expenses_to_dataframe(expenses)
 
 with tab_dashboard:
     today = date.today()
-    c1, c2 = st.columns(2)
-    year = c1.number_input("Ano", 2020, 2100, today.year)
-    month = c2.selectbox("Mês", range(1, 13), index=today.month - 1)
+    f1, f2, f3 = st.columns(3)
+    year = f1.number_input("Ano", 2020, 2100, today.year)
+    month = f2.selectbox("Mês", range(1, 13), index=today.month - 1)
+    category_option = f3.selectbox("Categoria", ["Todas"] + CATEGORIES)
+    selected_category = None if category_option == "Todas" else category_option
 
-    info = monthly_insights(df, int(year), int(month))
+    info = monthly_insights(df, int(year), int(month), selected_category)
+    statement = filter_expenses(df, int(year), int(month), selected_category)
+
     m1, m2, m3 = st.columns(3)
-
     delta = None if info["variation_pct"] is None else f"{info['variation_pct']:+.1f}%"
-    m1.metric("Total do mês", money(info["total"]), delta=delta)
-    m2.metric("Mês anterior", money(info["previous_total"]))
-    m3.metric("Maior categoria", info["top_category"] or "Sem dados")
+    m1.metric("Total do período", money(info["total"]), delta=delta)
+    m2.metric("Período anterior", money(info["previous_total"]))
+    m3.metric(
+        "Categoria",
+        selected_category or info["top_category"] or "Sem dados",
+    )
 
     if not info["by_category"].empty:
         st.subheader("Gastos por categoria")
         st.bar_chart(info["by_category"])
 
+    st.subheader("Extrato detalhado")
+    if statement.empty:
+        st.info("Nenhuma despesa encontrada para os filtros selecionados.")
+    else:
+        detail = statement[
+            ["data", "categoria", "descricao", "estabelecimento", "valor"]
+        ].copy()
+        detail["data"] = detail["data"].dt.date
+        detail["estabelecimento"] = detail["estabelecimento"].fillna("—")
+        detail = detail.rename(
+            columns={
+                "data": "Data",
+                "categoria": "Categoria",
+                "descricao": "Descrição",
+                "estabelecimento": "Estabelecimento",
+                "valor": "Valor (R$)",
+            }
+        )
+        st.dataframe(
+            detail,
+            use_container_width=True,
+            hide_index=True,
+            column_config={
+                "Valor (R$)": st.column_config.NumberColumn(format="R$ %.2f"),
+            },
+        )
+
+        category_summary = (
+            statement.groupby("categoria")["valor"]
+            .agg(["sum", "count"])
+            .sort_values("sum", ascending=False)
+            .reset_index()
+        )
+        category_summary.columns = ["Categoria", "Total (R$)", "Lançamentos"]
+
+        with st.expander("Resumo do extrato"):
+            st.dataframe(
+                category_summary,
+                use_container_width=True,
+                hide_index=True,
+                column_config={
+                    "Total (R$)": st.column_config.NumberColumn(format="R$ %.2f"),
+                },
+            )
+
     st.subheader("Alertas de anomalia")
-    anomalies = detect_anomalies(df)
+    anomaly_source = statement if selected_category else filter_expenses(
+        df, int(year), int(month)
+    )
+    anomalies = detect_anomalies(anomaly_source)
     if anomalies.empty:
-        st.info("Nenhuma anomalia detectada com o histórico disponível.")
+        st.info("Nenhuma anomalia detectada com o histórico disponível para este filtro.")
     else:
         st.dataframe(
             anomalies[["data", "categoria", "descricao", "valor", "limite_anomalia"]],
