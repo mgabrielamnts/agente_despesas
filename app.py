@@ -35,6 +35,12 @@ if "expense_draft" not in st.session_state:
 if "raw_messages" not in st.session_state:
     st.session_state.raw_messages = []
 
+if "anomaly_alert_id" not in st.session_state:
+    st.session_state.anomaly_alert_id = None
+
+if "anomaly_edit_id" not in st.session_state:
+    st.session_state.anomaly_edit_id = None
+
 
 def money(value: float) -> str:
     return f"R$ {value:,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
@@ -125,10 +131,30 @@ with tab_chat:
                 confirm, edit, cancel = st.columns(3)
                 if confirm.button("Confirmar e salvar", type="primary", use_container_width=True):
                     draft["category"] = draft.get("category") or "Outros"
-                    add_expense(draft, raw_text=" | ".join(st.session_state.raw_messages))
-                    st.session_state.chat_messages.append(
-                        {"role": "assistant", "content": "Despesa salva com sucesso. ✅ Pode me contar a próxima."}
+                    saved_expense = add_expense(
+                        draft,
+                        raw_text=" | ".join(st.session_state.raw_messages),
                     )
+                    current_df = expenses_to_dataframe(list_expenses())
+                    current_anomalies = detect_anomalies(current_df)
+                    is_anomaly = (
+                        not current_anomalies.empty
+                        and "id" in current_anomalies.columns
+                        and saved_expense.id in current_anomalies["id"].astype(int).tolist()
+                    )
+
+                    if is_anomaly:
+                        st.session_state.anomaly_alert_id = saved_expense.id
+                        st.session_state.chat_messages.append(
+                            {
+                                "role": "assistant",
+                                "content": "Despesa salva, mas detectei um gasto fora do seu padrão. ⚠️",
+                            }
+                        )
+                    else:
+                        st.session_state.chat_messages.append(
+                            {"role": "assistant", "content": "Despesa salva com sucesso. ✅ Pode me contar a próxima."}
+                        )
                     reset_conversation()
                     st.rerun()
 
@@ -159,6 +185,93 @@ with tab_chat:
             st.session_state.expense_draft = edited_draft
             st.session_state.edit_draft = False
             st.rerun()
+
+    if st.session_state.anomaly_alert_id is not None:
+        alert_expenses = list_expenses()
+        alert_expense = next(
+            (
+                expense
+                for expense in alert_expenses
+                if expense.id == st.session_state.anomaly_alert_id
+            ),
+            None,
+        )
+
+        if alert_expense is None:
+            st.session_state.anomaly_alert_id = None
+            st.session_state.anomaly_edit_id = None
+        else:
+            alert_df = expenses_to_dataframe(alert_expenses)
+            alert_anomalies = detect_anomalies(alert_df)
+            alert_row = (
+                alert_anomalies[
+                    alert_anomalies["id"].astype(int) == alert_expense.id
+                ]
+                if not alert_anomalies.empty and "id" in alert_anomalies.columns
+                else alert_anomalies
+            )
+
+            with st.chat_message("assistant"):
+                st.warning(
+                    f"**Gasto fora do seu padrão**\n\n"
+                    f"Detectei um valor atípico em **{alert_expense.category}: "
+                    f"{money(float(alert_expense.amount))}**. "
+                    "O lançamento está correto?"
+                )
+                keep_col, correct_col, delete_col = st.columns(3)
+
+                if keep_col.button(
+                    "✓ Sim, manter",
+                    key=f"keep_anomaly_{alert_expense.id}",
+                    use_container_width=True,
+                ):
+                    st.session_state.anomaly_alert_id = None
+                    st.session_state.anomaly_edit_id = None
+                    st.session_state.chat_messages.append(
+                        {"role": "assistant", "content": "Certo, mantive o lançamento. ✅"}
+                    )
+                    st.rerun()
+
+                if correct_col.button(
+                    "✏️ Corrigir",
+                    key=f"correct_anomaly_{alert_expense.id}",
+                    use_container_width=True,
+                ):
+                    st.session_state.anomaly_edit_id = alert_expense.id
+                    st.rerun()
+
+                if delete_col.button(
+                    "🗑️ Excluir",
+                    key=f"delete_anomaly_{alert_expense.id}",
+                    use_container_width=True,
+                ):
+                    delete_expense(alert_expense.id)
+                    st.session_state.anomaly_alert_id = None
+                    st.session_state.anomaly_edit_id = None
+                    st.session_state.chat_messages.append(
+                        {"role": "assistant", "content": "Lançamento excluído. 🗑️"}
+                    )
+                    st.rerun()
+
+            if st.session_state.anomaly_edit_id == alert_expense.id:
+                st.subheader("Corrigir lançamento")
+                corrected_data = render_expense_form(
+                    form_key=f"anomaly_edit_form_{alert_expense.id}",
+                    amount=float(alert_expense.amount),
+                    category=alert_expense.category,
+                    expense_date=alert_expense.expense_date,
+                    description=alert_expense.description,
+                    establishment=alert_expense.establishment,
+                    submit_label="Salvar correção",
+                )
+                if corrected_data:
+                    update_expense(alert_expense.id, corrected_data)
+                    st.session_state.anomaly_alert_id = None
+                    st.session_state.anomaly_edit_id = None
+                    st.session_state.chat_messages.append(
+                        {"role": "assistant", "content": "Lançamento corrigido com sucesso. ✅"}
+                    )
+                    st.rerun()
 
     user_text = st.chat_input("Ex.: gastei 45 reais no mercado ontem")
 
