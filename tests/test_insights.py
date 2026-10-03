@@ -1,6 +1,6 @@
 import pandas as pd
 
-from src.insights import detect_anomalies, filter_expenses, monthly_insights
+from src.insights import annual_insights, detect_anomalies, filter_expenses, monthly_insights
 
 
 def sample_df():
@@ -77,3 +77,11 @@ def test_detects_gasoline_outlier_using_historical_transport_expenses():
 
     assert len(october_anomalies) == 1
     assert october_anomalies.iloc[0]["valor"] == 1000.0
+
+
+def test_annual_insights_groups_expenses_by_month():
+    result = annual_insights(sample_df(), 2026)
+    assert result["total"] == 260.0
+    assert result["by_month"].loc[9] == 110.0
+    assert result["by_month"].loc[10] == 150.0
+    assert result["top_category"] == "Mercado"
