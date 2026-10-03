@@ -49,3 +49,8 @@ def test_detects_high_outlier():
     result = detect_anomalies(df)
     assert len(result) == 1
     assert result.iloc[0]["valor"] == 200
+
+
+def test_filter_expenses_returns_empty_for_period_without_records():
+    result = filter_expenses(sample_df(), 2025, 1)
+    assert result.empty
