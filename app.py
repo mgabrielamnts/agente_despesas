@@ -2,6 +2,7 @@ from datetime import date
 
 import streamlit as st
 
+from src.config import CATEGORIES
 from src.database import init_db
 from src.extraction import (
     ExtractionError,
@@ -10,7 +11,7 @@ from src.extraction import (
     question_for_missing,
 )
 from src.insights import detect_anomalies, expenses_to_dataframe, monthly_insights
-from src.repository import add_expense, delete_expense, list_expenses
+from src.repository import add_expense, delete_expense, list_expenses, update_expense
 
 
 st.set_page_config(page_title="Agente de Despesas", page_icon="💰", layout="wide")
@@ -43,9 +44,11 @@ def reset_conversation() -> None:
 tab_chat, tab_dashboard, tab_history = st.tabs(["💬 Conversa", "📊 Dashboard", "📋 Histórico"])
 
 with tab_chat:
-    for message in st.session_state.chat_messages:
-        with st.chat_message(message["role"]):
-            st.markdown(message["content"])
+    chat_area = st.container(height=430)
+    with chat_area:
+        for message in st.session_state.chat_messages:
+            with st.chat_message(message["role"]):
+                st.markdown(message["content"])
 
     draft = st.session_state.expense_draft
     if draft and not missing_fields(draft):
@@ -58,7 +61,7 @@ with tab_chat:
             if draft.get("establishment"):
                 st.write(f"📍 {draft['establishment']}")
 
-            confirm, cancel = st.columns(2)
+            confirm, edit, cancel = st.columns(3)
             if confirm.button("Confirmar e salvar", type="primary", use_container_width=True):
                 draft["category"] = draft.get("category") or "Outros"
                 add_expense(
@@ -71,12 +74,39 @@ with tab_chat:
                 reset_conversation()
                 st.rerun()
 
+            if edit.button("✏️ Editar", use_container_width=True):
+                st.session_state.edit_draft = True
+                st.rerun()
+
             if cancel.button("Cancelar", use_container_width=True):
                 st.session_state.chat_messages.append(
                     {"role": "assistant", "content": "Tudo bem, descartei essa despesa. Pode me contar outra."}
                 )
                 reset_conversation()
                 st.rerun()
+
+    if st.session_state.get("edit_draft") and draft and not missing_fields(draft):
+        st.subheader("Editar antes de salvar")
+        with st.form("edit_draft_form"):
+            e1, e2 = st.columns(2)
+            edited_amount = e1.number_input("Valor (R$)", min_value=0.01, value=float(draft["amount"]), step=0.01)
+            current_category = draft.get("category") or "Outros"
+            edited_category = e2.selectbox("Categoria", CATEGORIES, index=CATEGORIES.index(current_category))
+            edited_date = e1.date_input("Data", value=date.fromisoformat(draft["expense_date"]))
+            edited_description = e2.text_input("Descrição", value=draft["description"])
+            edited_establishment = st.text_input("Estabelecimento", value=draft.get("establishment") or "")
+            save_edit = st.form_submit_button("Salvar edição", type="primary")
+
+        if save_edit:
+            st.session_state.expense_draft = {
+                "amount": edited_amount,
+                "category": edited_category,
+                "expense_date": edited_date.isoformat(),
+                "description": edited_description.strip(),
+                "establishment": edited_establishment.strip() or None,
+            }
+            st.session_state.edit_draft = False
+            st.rerun()
 
     user_text = st.chat_input("Ex.: gastei 45 reais no mercado ontem")
 
@@ -149,11 +179,60 @@ with tab_history:
     else:
         display = df.sort_values("data", ascending=False).copy()
         display["data"] = display["data"].dt.date
+        display["estabelecimento"] = display["estabelecimento"].fillna("—")
         st.dataframe(display, use_container_width=True, hide_index=True)
 
         ids = [expense.id for expense in expenses]
-        selected_id = st.selectbox("ID para excluir", ids)
-        if st.button("Excluir despesa"):
+        selected_id = st.selectbox("Selecione uma despesa", ids)
+        selected = next(expense for expense in expenses if expense.id == selected_id)
+
+        action_edit, action_delete = st.columns(2)
+
+        if action_edit.button("✏️ Editar despesa", use_container_width=True):
+            st.session_state.history_edit_id = selected_id
+
+        if action_delete.button("🗑️ Excluir despesa", use_container_width=True):
             delete_expense(selected_id)
             st.success("Despesa excluída.")
             st.rerun()
+
+        if st.session_state.get("history_edit_id") == selected_id:
+            st.subheader("Editar despesa")
+            with st.form("history_edit_form"):
+                h1, h2 = st.columns(2)
+                history_amount = h1.number_input(
+                    "Valor (R$)",
+                    min_value=0.01,
+                    value=float(selected.amount),
+                    step=0.01,
+                    key="history_amount",
+                )
+                history_category = h2.selectbox(
+                    "Categoria",
+                    CATEGORIES,
+                    index=CATEGORIES.index(selected.category) if selected.category in CATEGORIES else CATEGORIES.index("Outros"),
+                    key="history_category",
+                )
+                history_date = h1.date_input("Data", value=selected.expense_date, key="history_date")
+                history_description = h2.text_input("Descrição", value=selected.description, key="history_description")
+                history_establishment = st.text_input(
+                    "Estabelecimento",
+                    value=selected.establishment or "",
+                    key="history_establishment",
+                )
+                save_history = st.form_submit_button("Salvar alterações", type="primary")
+
+            if save_history:
+                update_expense(
+                    selected_id,
+                    {
+                        "amount": history_amount,
+                        "category": history_category,
+                        "expense_date": history_date.isoformat(),
+                        "description": history_description.strip(),
+                        "establishment": history_establishment.strip() or None,
+                    },
+                )
+                st.session_state.pop("history_edit_id", None)
+                st.success("Despesa atualizada.")
+                st.rerun()
