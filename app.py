@@ -148,7 +148,28 @@ def render_expense_form(
     }
 
 
-tab_chat, tab_dashboard, tab_history = st.tabs(["💬 Conversa", "📊 Dashboard", "📋 Histórico"])
+def open_history_from_category(year: int, months: list[int], view_mode: str) -> None:
+    chart_state = st.session_state.get("category_chart")
+    if not chart_state:
+        return
+    selection = chart_state.get("selection", {}).get("category_select", {})
+    categories = selection.get("categoria", [])
+    if not categories:
+        return
+
+    st.session_state["main_tabs"] = "📋 Histórico"
+    st.session_state["history_year"] = year
+    st.session_state["history_month"] = (
+        months[0] if view_mode == "Mensal" and len(months) == 1 else 0
+    )
+    st.session_state["history_category"] = categories[0]
+
+
+tab_chat, tab_dashboard, tab_history = st.tabs(
+    ["💬 Conversa", "📊 Dashboard", "📋 Histórico"],
+    key="main_tabs",
+    on_change="rerun",
+)
 
 with tab_chat:
     draft = st.session_state.expense_draft
@@ -430,8 +451,48 @@ with tab_dashboard:
 
     if not info["by_category"].empty:
         st.subheader("Gastos por categoria")
-        st.bar_chart(info["by_category"])
-        st.caption("Quer ver os lançamentos? Use os mesmos filtros na aba Histórico.")
+        category_chart_data = (
+            info["by_category"]
+            .rename("valor")
+            .reset_index()
+            .rename(columns={"index": "categoria"})
+        )
+        chart_spec = {
+            "mark": {"type": "bar", "tooltip": True},
+            "params": [
+                {
+                    "name": "category_select",
+                    "select": {"type": "point", "fields": ["categoria"]},
+                }
+            ],
+            "encoding": {
+                "x": {
+                    "field": "categoria",
+                    "type": "nominal",
+                    "title": "Categoria",
+                    "sort": "-y",
+                },
+                "y": {
+                    "field": "valor",
+                    "type": "quantitative",
+                    "title": "Valor (R$)",
+                },
+                "opacity": {
+                    "condition": {"param": "category_select", "value": 1},
+                    "value": 0.75,
+                },
+            },
+        }
+        chart_months = selected_months if view_mode == "Mensal" else []
+        st.vega_lite_chart(
+            category_chart_data,
+            chart_spec,
+            use_container_width=True,
+            key="category_chart",
+            on_select=open_history_from_category,
+            args=(year, chart_months, view_mode),
+        )
+        st.caption("Clique em uma categoria para abrir os lançamentos no Histórico.")
 
     st.subheader("⚠️ Gastos fora do padrão")
     all_anomalies = detect_anomalies(df)
@@ -506,18 +567,25 @@ with tab_history:
         history_year = int(
             h1.number_input("Ano", 2020, 2100, date.today().year, key="history_year")
         )
-        history_months = h2.multiselect(
-            "Meses",
-            options=list(month_names),
-            default=list(month_names),
-            format_func=lambda month_number: month_names[month_number],
-            key="history_months",
+        history_month = h2.selectbox(
+            "Mês",
+            options=[0] + list(month_names),
+            index=date.today().month,
+            format_func=lambda month_number: (
+                "Todos os meses"
+                if month_number == 0
+                else month_names[month_number]
+            ),
+            key="history_month",
         )
         history_category_option = h3.selectbox(
             "Categoria", ["Todas"] + CATEGORIES, key="history_category"
         )
         history_category = (
             None if history_category_option == "Todas" else history_category_option
+        )
+        history_months = (
+            list(month_names) if history_month == 0 else [history_month]
         )
         search_text = st.text_input(
             "🔎 Buscar",
@@ -547,14 +615,13 @@ with tab_history:
             st.info("Nenhum lançamento encontrado para esses filtros.")
         else:
             display = history_df[
-                ["id", "data", "categoria", "descricao", "estabelecimento", "valor"]
+                ["data", "categoria", "descricao", "estabelecimento", "valor"]
             ].copy()
             display["data"] = display["data"].dt.strftime("%d/%m/%Y")
             display["categoria"] = display["categoria"].map(category_label)
             display["descricao"] = display["descricao"].str.strip().str.capitalize()
             display["estabelecimento"] = display["estabelecimento"].fillna("—")
             display = display.rename(columns={
-                "id": "ID",
                 "data": "Data",
                 "categoria": "Categoria",
                 "descricao": "Descrição",
@@ -571,11 +638,18 @@ with tab_history:
             )
 
             visible_ids = history_df["id"].astype(int).tolist()
+            expense_by_id = {expense.id: expense for expense in expenses}
             selected_id = st.selectbox(
                 "Selecione um lançamento para gerenciar",
                 [None] + visible_ids,
                 format_func=lambda value: (
-                    "Selecionar..." if value is None else f"Despesa #{value}"
+                    "Selecionar..."
+                    if value is None
+                    else (
+                        f"{br_date(expense_by_id[value].expense_date)} · "
+                        f"{expense_by_id[value].description.capitalize()} · "
+                        f"{money(float(expense_by_id[value].amount))}"
+                    )
                 ),
                 key="history_selected_id",
             )
