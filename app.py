@@ -1,4 +1,5 @@
 from datetime import date
+import logging
 
 import streamlit as st
 
@@ -13,6 +14,9 @@ from src.extraction import (
 from src.insights import detect_anomalies, expenses_to_dataframe, monthly_insights
 from src.repository import add_expense, delete_expense, list_expenses, update_expense
 
+
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
 
 st.set_page_config(page_title="Agente de Despesas", page_icon="💰", layout="wide")
 init_db()
@@ -44,46 +48,44 @@ def reset_conversation() -> None:
 tab_chat, tab_dashboard, tab_history = st.tabs(["💬 Conversa", "📊 Dashboard", "📋 Histórico"])
 
 with tab_chat:
-    chat_area = st.container(height=430)
+    draft = st.session_state.expense_draft
+
+    chat_area = st.container(height=520)
     with chat_area:
         for message in st.session_state.chat_messages:
             with st.chat_message(message["role"]):
                 st.markdown(message["content"])
 
-    draft = st.session_state.expense_draft
-    if draft and not missing_fields(draft):
-        with st.chat_message("assistant"):
-            st.markdown("**Encontrei esta despesa:**")
-            st.write(f"💵 {money(draft['amount'])}")
-            st.write(f"🏷️ {draft.get('category') or 'Outros'}")
-            st.write(f"📝 {draft['description']}")
-            st.write(f"📅 {draft['expense_date']}")
-            if draft.get("establishment"):
-                st.write(f"📍 {draft['establishment']}")
+        if draft and not missing_fields(draft):
+            with st.chat_message("assistant"):
+                st.markdown("**Encontrei esta despesa:**")
+                st.write(f"💵 {money(draft['amount'])}")
+                st.write(f"🏷️ {draft.get('category') or 'Outros'}")
+                st.write(f"📝 {draft['description']}")
+                st.write(f"📅 {draft['expense_date']}")
+                if draft.get("establishment"):
+                    st.write(f"📍 {draft['establishment']}")
 
-            confirm, edit, cancel = st.columns(3)
-            if confirm.button("Confirmar e salvar", type="primary", use_container_width=True):
-                draft["category"] = draft.get("category") or "Outros"
-                add_expense(
-                    draft,
-                    raw_text=" | ".join(st.session_state.raw_messages),
-                )
-                st.session_state.chat_messages.append(
-                    {"role": "assistant", "content": "Despesa salva com sucesso. ✅ Pode me contar a próxima."}
-                )
-                reset_conversation()
-                st.rerun()
+                confirm, edit, cancel = st.columns(3)
+                if confirm.button("Confirmar e salvar", type="primary", use_container_width=True):
+                    draft["category"] = draft.get("category") or "Outros"
+                    add_expense(draft, raw_text=" | ".join(st.session_state.raw_messages))
+                    st.session_state.chat_messages.append(
+                        {"role": "assistant", "content": "Despesa salva com sucesso. ✅ Pode me contar a próxima."}
+                    )
+                    reset_conversation()
+                    st.rerun()
 
-            if edit.button("✏️ Editar", use_container_width=True):
-                st.session_state.edit_draft = True
-                st.rerun()
+                if edit.button("✏️ Editar", use_container_width=True):
+                    st.session_state.edit_draft = True
+                    st.rerun()
 
-            if cancel.button("Cancelar", use_container_width=True):
-                st.session_state.chat_messages.append(
-                    {"role": "assistant", "content": "Tudo bem, descartei essa despesa. Pode me contar outra."}
-                )
-                reset_conversation()
-                st.rerun()
+                if cancel.button("Cancelar", use_container_width=True):
+                    st.session_state.chat_messages.append(
+                        {"role": "assistant", "content": "Tudo bem, descartei essa despesa. Pode me contar outra."}
+                    )
+                    reset_conversation()
+                    st.rerun()
 
     if st.session_state.get("edit_draft") and draft and not missing_fields(draft):
         st.subheader("Editar antes de salvar")
@@ -93,8 +95,8 @@ with tab_chat:
             current_category = draft.get("category") or "Outros"
             edited_category = e2.selectbox("Categoria", CATEGORIES, index=CATEGORIES.index(current_category))
             edited_date = e1.date_input("Data", value=date.fromisoformat(draft["expense_date"]))
-            edited_description = e2.text_input("Descrição", value=draft["description"])
-            edited_establishment = st.text_input("Estabelecimento", value=draft.get("establishment") or "")
+            edited_description = e2.text_input("Descrição", value=draft["description"], max_chars=200)
+            edited_establishment = st.text_input("Estabelecimento", value=draft.get("establishment") or "", max_chars=120)
             save_edit = st.form_submit_button("Salvar edição", type="primary")
 
         if save_edit:
@@ -121,12 +123,7 @@ with tab_chat:
             )
             st.session_state.expense_draft = updated
             missing = missing_fields(updated)
-
-            if missing:
-                reply = question_for_missing(missing)
-            else:
-                reply = "Entendi. Confira os dados abaixo antes de eu salvar."
-
+            reply = question_for_missing(missing) if missing else "Entendi. Confira os dados abaixo antes de eu salvar."
             st.session_state.chat_messages.append({"role": "assistant", "content": reply})
             st.rerun()
 
@@ -135,9 +132,13 @@ with tab_chat:
                 {"role": "assistant", "content": f"Não consegui continuar: {exc}"}
             )
             st.rerun()
-        except Exception as exc:
+        except Exception:
+            logger.exception("Erro inesperado ao consultar o Gemini")
             st.session_state.chat_messages.append(
-                {"role": "assistant", "content": f"Falha ao consultar a IA: {exc}"}
+                {
+                    "role": "assistant",
+                    "content": "Não consegui consultar a IA agora. Tente novamente em alguns instantes.",
+                }
             )
             st.rerun()
 
@@ -214,10 +215,11 @@ with tab_history:
                     key="history_category",
                 )
                 history_date = h1.date_input("Data", value=selected.expense_date, key="history_date")
-                history_description = h2.text_input("Descrição", value=selected.description, key="history_description")
+                history_description = h2.text_input("Descrição", value=selected.description, max_chars=200, key="history_description")
                 history_establishment = st.text_input(
                     "Estabelecimento",
                     value=selected.establishment or "",
+                    max_chars=120,
                     key="history_establishment",
                 )
                 save_history = st.form_submit_button("Salvar alterações", type="primary")
