@@ -1,4 +1,4 @@
-from datetime import date
+from datetime import date, datetime
 import logging
 
 import streamlit as st
@@ -16,8 +16,10 @@ from src.insights import (
     detect_anomalies,
     expenses_to_dataframe,
     filter_expenses,
+    filter_expenses_by_months,
     filter_expenses_by_year,
     monthly_insights,
+    period_insights,
 )
 from src.repository import (
     add_expense,
@@ -41,8 +43,15 @@ st.title("💰 Agente de IA para Análise de Despesas")
 st.caption("Converse com o agente para registrar seus gastos e acompanhar seus padrões.")
 
 if "chat_messages" not in st.session_state:
+    hour = datetime.now().hour
+    if hour < 12:
+        greeting = "Bom dia, Maria! ☀️ Deseja informar algum gasto hoje?"
+    elif hour < 18:
+        greeting = "Boa tarde, Maria! Deseja informar algum gasto hoje?"
+    else:
+        greeting = "Boa noite, Maria! Deseja informar algum gasto hoje?"
     st.session_state.chat_messages = [
-        {"role": "assistant", "content": "Oi! Me conte uma despesa que você teve."}
+        {"role": "assistant", "content": greeting}
     ]
 
 if "expense_draft" not in st.session_state:
@@ -168,12 +177,21 @@ with tab_chat:
                         st.session_state.chat_messages.append(
                             {
                                 "role": "assistant",
-                                "content": "Despesa salva, mas detectei um gasto fora do seu padrão. ⚠️",
+                                "content": (
+                                    f"OK! Gasto de {money(float(saved_expense.amount))} com "
+                                    f"{saved_expense.description.lower()} salvo. ⚠️"
+                                ),
                             }
                         )
                     else:
                         st.session_state.chat_messages.append(
-                            {"role": "assistant", "content": "Despesa salva com sucesso. ✅ Pode me contar a próxima."}
+                            {
+                                "role": "assistant",
+                                "content": (
+                                    f"OK! Gasto de {money(float(saved_expense.amount))} com "
+                                    f"{saved_expense.description.lower()} salvo. ✅"
+                                ),
+                            }
                         )
                     reset_conversation()
                     st.rerun()
@@ -333,21 +351,26 @@ df = expenses_to_dataframe(expenses)
 
 with tab_dashboard:
     today = date.today()
-    view_mode = st.radio(
-        "Período",
-        ["Mensal", "Anual"],
-        horizontal=True,
-    )
+    month_names = {
+        1: "Janeiro", 2: "Fevereiro", 3: "Março", 4: "Abril",
+        5: "Maio", 6: "Junho", 7: "Julho", 8: "Agosto",
+        9: "Setembro", 10: "Outubro", 11: "Novembro", 12: "Dezembro",
+    }
+    view_mode = st.radio("Período", ["Mensal", "Anual"], horizontal=True)
 
     if view_mode == "Mensal":
         f1, f2, f3 = st.columns(3)
         year = int(f1.number_input("Ano", 2020, 2100, today.year))
-        month = int(f2.selectbox("Mês", range(1, 13), index=today.month - 1))
+        selected_months = f2.multiselect(
+            "Meses",
+            options=list(month_names),
+            default=[today.month],
+            format_func=lambda month_number: month_names[month_number],
+        )
         category_option = f3.selectbox("Categoria", ["Todas"] + CATEGORIES)
         selected_category = None if category_option == "Todas" else category_option
-        info = monthly_insights(df, year, month, selected_category)
-        statement = filter_expenses(df, year, month, selected_category)
-        previous_label = "Mês anterior"
+        info = period_insights(df, year, selected_months, selected_category)
+        statement = filter_expenses_by_months(df, year, selected_months, selected_category)
     else:
         f1, f2 = st.columns(2)
         year = int(f1.number_input("Ano", 2020, 2100, today.year, key="annual_year"))
@@ -355,24 +378,42 @@ with tab_dashboard:
         selected_category = None if category_option == "Todas" else category_option
         info = annual_insights(df, year, selected_category)
         statement = filter_expenses_by_year(df, year, selected_category)
-        previous_label = "Ano anterior"
 
     m1, m2, m3 = st.columns(3)
-    delta = None if info["variation_pct"] is None else f"{info['variation_pct']:+.1f}%"
-    m1.metric("Total do período", money(info["total"]), delta=delta)
-    m2.metric(previous_label, money(info["previous_total"]))
+
+    if view_mode == "Mensal" and len(selected_months) == 1:
+        month_info = monthly_insights(df, year, selected_months[0], selected_category)
+        delta = (
+            None
+            if month_info["variation_pct"] is None
+            else f"{month_info['variation_pct']:+.1f}% vs. mês anterior"
+        )
+        m1.metric("Total do período", money(info["total"]), delta=delta)
+        m2.metric("Mês anterior", money(month_info["previous_total"]))
+    elif view_mode == "Anual":
+        delta = (
+            None
+            if info["variation_pct"] is None
+            else f"{info['variation_pct']:+.1f}% vs. ano anterior"
+        )
+        m1.metric("Total no ano", money(info["total"]), delta=delta)
+        m2.metric("Ano anterior", money(info["previous_total"]))
+    else:
+        m1.metric("Total do período", money(info["total"]))
+        m2.metric("Meses selecionados", len(selected_months))
+
     m3.metric(
-        "Categoria selecionada" if selected_category else "Maior categoria",
+        "Categoria selecionada" if selected_category else "Categoria com maior gasto",
         selected_category or info["top_category"] or "Sem dados",
     )
 
     if view_mode == "Anual":
-        st.subheader("Gastos por mês")
+        st.subheader("Evolução dos gastos no ano")
         monthly_chart = info["by_month"].rename(
             index={1:"Jan",2:"Fev",3:"Mar",4:"Abr",5:"Mai",6:"Jun",
                    7:"Jul",8:"Ago",9:"Set",10:"Out",11:"Nov",12:"Dez"}
         )
-        st.bar_chart(monthly_chart)
+        st.line_chart(monthly_chart)
 
     if not info["by_category"].empty:
         st.subheader("Gastos por categoria")
@@ -389,24 +430,19 @@ with tab_dashboard:
         detail["descricao"] = detail["descricao"].str.strip().str.capitalize()
         detail["estabelecimento"] = detail["estabelecimento"].fillna("—")
         detail = detail.rename(columns={
-            "data": "Data",
-            "categoria": "Categoria",
-            "descricao": "Descrição",
-            "estabelecimento": "Estabelecimento",
-            "valor": "Valor (R$)",
+            "data": "Data", "categoria": "Categoria", "descricao": "Descrição",
+            "estabelecimento": "Estabelecimento", "valor": "Valor (R$)",
         })
         st.dataframe(
-            detail,
-            use_container_width=True,
-            hide_index=True,
+            detail, use_container_width=True, hide_index=True,
             column_config={"Valor (R$)": st.column_config.NumberColumn(format="R$ %.2f")},
         )
 
     st.subheader("⚠️ Gastos fora do padrão")
     all_anomalies = detect_anomalies(df)
     if view_mode == "Mensal" and not all_anomalies.empty:
-        period_anomalies = filter_expenses(
-            all_anomalies, year, month, selected_category
+        period_anomalies = filter_expenses_by_months(
+            all_anomalies, year, selected_months, selected_category
         )
     elif view_mode == "Anual" and not all_anomalies.empty:
         period_anomalies = filter_expenses_by_year(
