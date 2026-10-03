@@ -59,3 +59,17 @@ def test_repository_crud_with_in_memory_sqlite(memory_session):
     deleted = repository.delete_expense(created.id)
     assert deleted is True
     assert repository.list_expenses() == []
+
+
+def test_anomaly_review_is_persisted(memory_session):
+    created = repository.add_expense(expense_data())
+    repository.mark_anomaly_reviewed(created.id, "confirmed")
+    assert created.id in repository.reviewed_anomaly_ids()
+
+
+def test_migrates_old_bills_category(memory_session):
+    data = {**expense_data(), "category": "Contas"}
+    created = repository.add_expense(data)
+    repository.migrate_category_labels()
+    migrated = next(e for e in repository.list_expenses() if e.id == created.id)
+    assert migrated.category == "Contas pessoais"
