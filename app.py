@@ -228,6 +228,7 @@ with tab_dashboard:
             ["data", "categoria", "descricao", "estabelecimento", "valor"]
         ].copy()
         detail["data"] = detail["data"].dt.date
+        detail["descricao"] = detail["descricao"].str.strip().str.capitalize()
         detail["estabelecimento"] = detail["estabelecimento"].fillna("—")
         detail = detail.rename(
             columns={
@@ -288,6 +289,7 @@ with tab_history:
     else:
         display = df.sort_values("data", ascending=False).copy()
         display["data"] = display["data"].dt.date
+        display["descricao"] = display["descricao"].str.strip().str.capitalize()
         display["estabelecimento"] = display["estabelecimento"].fillna("—")
         st.dataframe(display, use_container_width=True, hide_index=True)
 
