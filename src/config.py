@@ -18,7 +18,7 @@ CATEGORIES = [
     "Mercado",
     "Transporte",
     "Moradia",
-    "Contas",
+    "Contas pessoais",
     "Saúde",
     "Educação",
     "Lazer",
