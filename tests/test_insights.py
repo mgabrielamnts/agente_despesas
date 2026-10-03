@@ -1,6 +1,13 @@
 import pandas as pd
 
-from src.insights import annual_insights, detect_anomalies, filter_expenses, monthly_insights
+from src.insights import (
+    annual_insights,
+    detect_anomalies,
+    filter_expenses,
+    filter_expenses_by_months,
+    monthly_insights,
+    period_insights,
+)
 
 
 def sample_df():
@@ -85,3 +92,20 @@ def test_annual_insights_groups_expenses_by_month():
     assert result["by_month"].loc[9] == 110.0
     assert result["by_month"].loc[10] == 150.0
     assert result["top_category"] == "Mercado"
+
+
+def test_filter_expenses_accepts_multiple_months():
+    result = filter_expenses_by_months(sample_df(), 2026, [9, 10], "Lazer")
+    assert len(result) == 2
+    assert result["valor"].sum() == 80.0
+
+
+def test_period_insights_combines_selected_months():
+    result = period_insights(sample_df(), 2026, [9, 10])
+    assert result["total"] == 260.0
+    assert result["top_category"] == "Mercado"
+
+
+def test_empty_month_selection_returns_no_expenses():
+    result = filter_expenses_by_months(sample_df(), 2026, [])
+    assert result.empty
