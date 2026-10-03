@@ -212,7 +212,7 @@ with tab_dashboard:
     m1.metric("Total do período", money(info["total"]), delta=delta)
     m2.metric("Período anterior", money(info["previous_total"]))
     m3.metric(
-        "Categoria",
+        "Categoria selecionada" if selected_category else "Maior categoria",
         selected_category or info["top_category"] or "Sem dados",
     )
 
