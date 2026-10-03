@@ -45,6 +45,62 @@ def reset_conversation() -> None:
     st.session_state.raw_messages = []
 
 
+def render_expense_form(
+    form_key: str,
+    amount: float,
+    category: str,
+    expense_date: date,
+    description: str,
+    establishment: str | None,
+    submit_label: str,
+) -> dict | None:
+    with st.form(form_key):
+        c1, c2 = st.columns(2)
+        edited_amount = c1.number_input(
+            "Valor (R$)",
+            min_value=0.01,
+            value=float(amount),
+            step=0.01,
+            key=f"{form_key}_amount",
+        )
+        safe_category = category if category in CATEGORIES else "Outros"
+        edited_category = c2.selectbox(
+            "Categoria",
+            CATEGORIES,
+            index=CATEGORIES.index(safe_category),
+            key=f"{form_key}_category",
+        )
+        edited_date = c1.date_input(
+            "Data",
+            value=expense_date,
+            key=f"{form_key}_date",
+        )
+        edited_description = c2.text_input(
+            "Descrição",
+            value=description,
+            max_chars=200,
+            key=f"{form_key}_description",
+        )
+        edited_establishment = st.text_input(
+            "Estabelecimento",
+            value=establishment or "",
+            max_chars=120,
+            key=f"{form_key}_establishment",
+        )
+        submitted = st.form_submit_button(submit_label, type="primary")
+
+    if not submitted:
+        return None
+
+    return {
+        "amount": edited_amount,
+        "category": edited_category,
+        "expense_date": edited_date.isoformat(),
+        "description": edited_description.strip(),
+        "establishment": edited_establishment.strip() or None,
+    }
+
+
 tab_chat, tab_dashboard, tab_history = st.tabs(["💬 Conversa", "📊 Dashboard", "📋 Histórico"])
 
 with tab_chat:
@@ -89,24 +145,18 @@ with tab_chat:
 
     if st.session_state.get("edit_draft") and draft and not missing_fields(draft):
         st.subheader("Editar antes de salvar")
-        with st.form("edit_draft_form"):
-            e1, e2 = st.columns(2)
-            edited_amount = e1.number_input("Valor (R$)", min_value=0.01, value=float(draft["amount"]), step=0.01)
-            current_category = draft.get("category") or "Outros"
-            edited_category = e2.selectbox("Categoria", CATEGORIES, index=CATEGORIES.index(current_category))
-            edited_date = e1.date_input("Data", value=date.fromisoformat(draft["expense_date"]))
-            edited_description = e2.text_input("Descrição", value=draft["description"], max_chars=200)
-            edited_establishment = st.text_input("Estabelecimento", value=draft.get("establishment") or "", max_chars=120)
-            save_edit = st.form_submit_button("Salvar edição", type="primary")
+        edited_draft = render_expense_form(
+            form_key="edit_draft_form",
+            amount=float(draft["amount"]),
+            category=draft.get("category") or "Outros",
+            expense_date=date.fromisoformat(draft["expense_date"]),
+            description=draft["description"],
+            establishment=draft.get("establishment"),
+            submit_label="Salvar edição",
+        )
 
-        if save_edit:
-            st.session_state.expense_draft = {
-                "amount": edited_amount,
-                "category": edited_category,
-                "expense_date": edited_date.isoformat(),
-                "description": edited_description.strip(),
-                "establishment": edited_establishment.strip() or None,
-            }
+        if edited_draft:
+            st.session_state.expense_draft = edited_draft
             st.session_state.edit_draft = False
             st.rerun()
 
@@ -216,10 +266,14 @@ with tab_dashboard:
             )
 
     st.subheader("Alertas de anomalia")
-    anomaly_source = statement if selected_category else filter_expenses(
-        df, int(year), int(month)
-    )
-    anomalies = detect_anomalies(anomaly_source)
+    anomalies = detect_anomalies(df)
+    if not anomalies.empty:
+        anomalies = filter_expenses(
+            anomalies,
+            int(year),
+            int(month),
+            selected_category,
+        )
     if anomalies.empty:
         st.info("Nenhuma anomalia detectada com o histórico disponível para este filtro.")
     else:
@@ -253,42 +307,18 @@ with tab_history:
 
         if st.session_state.get("history_edit_id") == selected_id:
             st.subheader("Editar despesa")
-            with st.form("history_edit_form"):
-                h1, h2 = st.columns(2)
-                history_amount = h1.number_input(
-                    "Valor (R$)",
-                    min_value=0.01,
-                    value=float(selected.amount),
-                    step=0.01,
-                    key="history_amount",
-                )
-                history_category = h2.selectbox(
-                    "Categoria",
-                    CATEGORIES,
-                    index=CATEGORIES.index(selected.category) if selected.category in CATEGORIES else CATEGORIES.index("Outros"),
-                    key="history_category",
-                )
-                history_date = h1.date_input("Data", value=selected.expense_date, key="history_date")
-                history_description = h2.text_input("Descrição", value=selected.description, max_chars=200, key="history_description")
-                history_establishment = st.text_input(
-                    "Estabelecimento",
-                    value=selected.establishment or "",
-                    max_chars=120,
-                    key="history_establishment",
-                )
-                save_history = st.form_submit_button("Salvar alterações", type="primary")
+            history_data = render_expense_form(
+                form_key="history_edit_form",
+                amount=float(selected.amount),
+                category=selected.category,
+                expense_date=selected.expense_date,
+                description=selected.description,
+                establishment=selected.establishment,
+                submit_label="Salvar alterações",
+            )
 
-            if save_history:
-                update_expense(
-                    selected_id,
-                    {
-                        "amount": history_amount,
-                        "category": history_category,
-                        "expense_date": history_date.isoformat(),
-                        "description": history_description.strip(),
-                        "establishment": history_establishment.strip() or None,
-                    },
-                )
+            if history_data:
+                update_expense(selected_id, history_data)
                 st.session_state.pop("history_edit_id", None)
                 st.success("Despesa atualizada.")
                 st.rerun()
