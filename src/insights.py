@@ -35,6 +35,53 @@ def filter_expenses(
     return filtered.sort_values(["data", "id"], ascending=[False, False])
 
 
+
+def filter_expenses_by_year(
+    df: pd.DataFrame,
+    year: int,
+    category: str | None = None,
+) -> pd.DataFrame:
+    if df.empty:
+        return df.copy()
+    filtered = df[df["data"].dt.year == year].copy()
+    if category:
+        filtered = filtered[filtered["categoria"] == category].copy()
+    return filtered.sort_values(["data", "id"], ascending=[False, False])
+
+
+def annual_insights(
+    df: pd.DataFrame,
+    year: int,
+    category: str | None = None,
+) -> dict:
+    current = filter_expenses_by_year(df, year, category)
+    previous = filter_expenses_by_year(df, year - 1, category)
+    total = float(current["valor"].sum()) if not current.empty else 0.0
+    previous_total = float(previous["valor"].sum()) if not previous.empty else 0.0
+    by_category = (
+        current.groupby("categoria")["valor"].sum().sort_values(ascending=False)
+        if not current.empty else pd.Series(dtype=float)
+    )
+    by_month = (
+        current.assign(mes=current["data"].dt.month)
+        .groupby("mes")["valor"].sum()
+        .reindex(range(1, 13), fill_value=0.0)
+        if not current.empty else pd.Series(0.0, index=range(1, 13), dtype=float)
+    )
+    variation = (
+        (total - previous_total) / previous_total * 100
+        if previous_total > 0 else None
+    )
+    return {
+        "total": total,
+        "previous_total": previous_total,
+        "variation_pct": variation,
+        "top_category": by_category.index[0] if not by_category.empty else None,
+        "by_category": by_category,
+        "by_month": by_month,
+    }
+
+
 def monthly_insights(
     df: pd.DataFrame,
     year: int,
