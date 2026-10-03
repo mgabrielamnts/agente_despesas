@@ -80,21 +80,37 @@ def monthly_insights(
 
 
 def detect_anomalies(df: pd.DataFrame, min_history: int = 4) -> pd.DataFrame:
+    """Detect high expenses against prior history from the same category.
+
+    Each expense is compared only with earlier records, so the candidate
+    expense does not inflate its own IQR threshold.
+    """
     if df.empty:
         return pd.DataFrame()
 
     alerts = []
     for _, group in df.groupby("categoria"):
-        if len(group) < min_history:
-            continue
+        sort_columns = ["data"] + (["id"] if "id" in group.columns else [])
+        ordered = group.sort_values(sort_columns, kind="stable").reset_index(drop=True)
 
-        q1 = group["valor"].quantile(0.25)
-        q3 = group["valor"].quantile(0.75)
-        upper = q3 + 1.5 * (q3 - q1)
+        for position in range(min_history, len(ordered)):
+            history = ordered.iloc[:position]
+            candidate = ordered.iloc[position]
 
-        anomalous = group[group["valor"] > upper].copy()
-        if not anomalous.empty:
-            anomalous["limite_anomalia"] = upper
-            alerts.append(anomalous)
+            q1 = history["valor"].quantile(0.25)
+            q3 = history["valor"].quantile(0.75)
+            upper = q3 + 1.5 * (q3 - q1)
 
-    return pd.concat(alerts, ignore_index=True) if alerts else pd.DataFrame()
+            if candidate["valor"] > upper:
+                anomalous = candidate.to_frame().T.copy()
+                anomalous["limite_anomalia"] = upper
+                alerts.append(anomalous)
+
+    if not alerts:
+        return pd.DataFrame()
+
+    result = pd.concat(alerts, ignore_index=True)
+    result["valor"] = pd.to_numeric(result["valor"])
+    result["limite_anomalia"] = pd.to_numeric(result["limite_anomalia"])
+    result["data"] = pd.to_datetime(result["data"])
+    return result
