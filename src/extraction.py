@@ -1,9 +1,12 @@
-from datetime import date
+from datetime import date, timedelta
 
 from google import genai
 
 from src.config import CATEGORIES, GEMINI_API_KEY, GEMINI_MODEL
 
+MAX_DESCRIPTION_LENGTH = 200
+MAX_ESTABLISHMENT_LENGTH = 120
+MAX_FUTURE_DAYS = 1
 
 TOOL = {
     "type": "function",
@@ -15,27 +18,11 @@ TOOL = {
     "parameters": {
         "type": "object",
         "properties": {
-            "amount": {
-                "type": "number",
-                "description": "Valor da despesa, maior que zero.",
-            },
-            "category": {
-                "type": "string",
-                "enum": CATEGORIES,
-                "description": "Categoria inferida a partir do gasto.",
-            },
-            "expense_date": {
-                "type": "string",
-                "description": "Data no formato YYYY-MM-DD.",
-            },
-            "description": {
-                "type": "string",
-                "description": "O que foi comprado ou tipo do gasto.",
-            },
-            "establishment": {
-                "type": "string",
-                "description": "Estabelecimento somente quando informado.",
-            },
+            "amount": {"type": "number", "description": "Valor da despesa, maior que zero."},
+            "category": {"type": "string", "enum": CATEGORIES, "description": "Categoria inferida a partir do gasto."},
+            "expense_date": {"type": "string", "description": "Data no formato YYYY-MM-DD."},
+            "description": {"type": "string", "description": "O que foi comprado ou tipo do gasto."},
+            "establishment": {"type": "string", "description": "Estabelecimento somente quando informado."},
         },
     },
 }
@@ -45,7 +32,8 @@ class ExtractionError(ValueError):
     pass
 
 
-def _validate_partial(data: dict) -> dict:
+def _validate_partial(data: dict, reference_date: date | None = None) -> dict:
+    today = reference_date or date.today()
     result = {
         "amount": data.get("amount"),
         "category": data.get("category"),
@@ -67,15 +55,22 @@ def _validate_partial(data: dict) -> dict:
 
     if result["expense_date"] is not None:
         try:
-            result["expense_date"] = date.fromisoformat(result["expense_date"]).isoformat()
+            parsed_date = date.fromisoformat(result["expense_date"])
         except (TypeError, ValueError) as exc:
             raise ExtractionError("A data retornada pela IA é inválida.") from exc
+        if parsed_date > today + timedelta(days=MAX_FUTURE_DAYS):
+            raise ExtractionError("A data da despesa está muito distante no futuro.")
+        result["expense_date"] = parsed_date.isoformat()
 
     if result["description"] is not None:
         result["description"] = str(result["description"]).strip() or None
+        if result["description"] and len(result["description"]) > MAX_DESCRIPTION_LENGTH:
+            raise ExtractionError(f"A descrição deve ter no máximo {MAX_DESCRIPTION_LENGTH} caracteres.")
 
     if result["establishment"] is not None:
         result["establishment"] = str(result["establishment"]).strip() or None
+        if result["establishment"] and len(result["establishment"]) > MAX_ESTABLISHMENT_LENGTH:
+            raise ExtractionError(f"O estabelecimento deve ter no máximo {MAX_ESTABLISHMENT_LENGTH} caracteres.")
 
     return result
 
@@ -111,13 +106,11 @@ def extract_expense_turn(
 ) -> dict:
     if not text.strip():
         raise ExtractionError("Digite uma mensagem.")
-
     if not GEMINI_API_KEY:
         raise ExtractionError("GEMINI_API_KEY não configurada.")
 
     today = reference_date or date.today()
     context = previous_data or {}
-
     prompt = (
         "Você ajuda a estruturar UMA despesa pessoal por vez em português do Brasil.\n"
         f"A data de referência é {today.isoformat()}.\n"
@@ -134,24 +127,20 @@ def extract_expense_turn(
     )
 
     client = genai.Client(api_key=GEMINI_API_KEY)
-
     interaction = client.interactions.create(
         model=GEMINI_MODEL,
         input=prompt,
         tools=[TOOL],
         generation_config={
             "tool_choice": {
-                "allowed_tools": {
-                    "mode": "any",
-                    "tools": ["analisar_despesa"],
-                }
+                "allowed_tools": {"mode": "any", "tools": ["analisar_despesa"]}
             }
         },
     )
 
     for step in interaction.steps:
         if step.type == "function_call" and step.name == "analisar_despesa":
-            current = _validate_partial(dict(step.arguments))
+            current = _validate_partial(dict(step.arguments), reference_date=today)
             return merge_expense_data(previous_data, current)
 
     raise ExtractionError("Não consegui interpretar a despesa. Tente novamente.")
