@@ -20,6 +20,7 @@ from src.insights import (
     monthly_insights,
     period_insights,
 )
+from src.navigation import selected_category_from_chart_state
 from src.time_utils import local_now, local_today
 from src.validation import ExpenseValidationError, validate_expense_data
 from src.repository import (
@@ -151,13 +152,10 @@ def render_expense_form(
 
 
 def open_history_from_category() -> None:
-    chart_state = st.session_state.get("category_chart")
-    if not chart_state:
-        return
-
-    selection = chart_state.get("selection", {}).get("category_select", {})
-    categories = selection.get("categoria", [])
-    if not categories:
+    category = selected_category_from_chart_state(
+        st.session_state.get("category_chart")
+    )
+    if category is None:
         return
 
     year = st.session_state.get("_drill_year", local_today().year)
@@ -169,7 +167,7 @@ def open_history_from_category() -> None:
     st.session_state["history_month"] = (
         months[0] if view_mode == "Mensal" and len(months) == 1 else 0
     )
-    st.session_state["history_category"] = categories[0]
+    st.session_state["history_category"] = category
 
 
 tab_chat, tab_dashboard, tab_history = st.tabs(
@@ -457,7 +455,11 @@ with tab_dashboard:
             "params": [
                 {
                     "name": "category_select",
-                    "select": {"type": "point", "fields": ["categoria"]},
+                    "select": {
+                        "type": "point",
+                        "fields": ["categoria"],
+                        "toggle": False,
+                    },
                 }
             ],
             "encoding": {
@@ -488,6 +490,7 @@ with tab_dashboard:
             use_container_width=True,
             key="category_chart",
             on_select=open_history_from_category,
+            selection_mode="category_select",
         )
         st.caption("Clique em uma categoria para abrir os lançamentos no Histórico.")
 
