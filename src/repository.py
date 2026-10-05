@@ -5,15 +5,18 @@ from sqlalchemy import select, update
 
 from src.database import SessionLocal
 from src.models import AnomalyReview, Expense
+from src.time_utils import local_today
+from src.validation import validate_expense_data
 
 
 def add_expense(data: dict, raw_text: str | None = None) -> Expense:
+    validated = validate_expense_data(data, reference_date=local_today())
     expense = Expense(
-        amount=Decimal(str(data["amount"])),
-        category=data["category"],
-        expense_date=date.fromisoformat(data["expense_date"]),
-        description=data["description"],
-        establishment=data.get("establishment"),
+        amount=Decimal(str(validated["amount"])),
+        category=validated["category"],
+        expense_date=date.fromisoformat(validated["expense_date"]),
+        description=validated["description"],
+        establishment=validated.get("establishment"),
         raw_text=raw_text,
     )
     with SessionLocal() as session:
@@ -34,16 +37,24 @@ def list_expenses() -> list[Expense]:
 
 
 def update_expense(expense_id: int, data: dict) -> bool:
+    validated = validate_expense_data(data, reference_date=local_today())
     with SessionLocal() as session:
         expense = session.get(Expense, expense_id)
         if expense is None:
             return False
 
-        expense.amount = Decimal(str(data["amount"]))
-        expense.category = data["category"]
-        expense.expense_date = date.fromisoformat(data["expense_date"])
-        expense.description = data["description"]
-        expense.establishment = data.get("establishment") or None
+        expense.amount = Decimal(str(validated["amount"]))
+        expense.category = validated["category"]
+        expense.expense_date = date.fromisoformat(validated["expense_date"])
+        expense.description = validated["description"]
+        expense.establishment = validated.get("establishment") or None
+
+        review = session.scalar(
+            select(AnomalyReview).where(AnomalyReview.expense_id == expense_id)
+        )
+        if review is not None:
+            session.delete(review)
+
         session.commit()
         return True
 
