@@ -611,6 +611,13 @@ with tab_history:
             )
             history_df = history_df[description_match | establishment_match].copy()
 
+        history_total = (
+            float(history_df["valor"].sum())
+            if not history_df.empty
+            else 0.0
+        )
+        st.metric("Total filtrado", money(history_total))
+
         if history_df.empty:
             st.info("Nenhum lançamento encontrado para esses filtros.")
         else:
