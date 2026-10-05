@@ -12,6 +12,7 @@ DATA_DIR.mkdir(exist_ok=True)
 DATABASE_URL = os.getenv("DATABASE_URL", f"sqlite:///{DATA_DIR / 'expenses.db'}")
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-3.5-flash-lite")
+APP_TIMEZONE = os.getenv("APP_TIMEZONE", "America/Sao_Paulo")
 
 CATEGORIES = [
     "Alimentação",
