@@ -1,4 +1,4 @@
-from datetime import date, datetime
+from datetime import date
 import logging
 
 import streamlit as st
@@ -15,12 +15,13 @@ from src.insights import (
     annual_insights,
     detect_anomalies,
     expenses_to_dataframe,
-    filter_expenses,
     filter_expenses_by_months,
     filter_expenses_by_year,
     monthly_insights,
     period_insights,
 )
+from src.time_utils import local_now, local_today
+from src.validation import ExpenseValidationError, validate_expense_data
 from src.repository import (
     add_expense,
     delete_expense,
@@ -43,7 +44,7 @@ st.title("💰 Agente de IA para Análise de Despesas")
 st.caption("Converse com o agente para registrar seus gastos e acompanhar seus padrões.")
 
 if "chat_messages" not in st.session_state:
-    hour = datetime.now().hour
+    hour = local_now().hour
     if hour < 12:
         greeting = "Bom dia, Maria! ☀️ Deseja informar algum gasto hoje?"
     elif hour < 18:
@@ -56,9 +57,6 @@ if "chat_messages" not in st.session_state:
 
 if "expense_draft" not in st.session_state:
     st.session_state.expense_draft = {}
-
-if "raw_messages" not in st.session_state:
-    st.session_state.raw_messages = []
 
 if "anomaly_alert_id" not in st.session_state:
     st.session_state.anomaly_alert_id = None
@@ -73,7 +71,6 @@ def money(value: float) -> str:
 
 def reset_conversation() -> None:
     st.session_state.expense_draft = {}
-    st.session_state.raw_messages = []
 
 
 def br_date(value) -> str:
@@ -139,23 +136,33 @@ def render_expense_form(
     if not submitted:
         return None
 
-    return {
+    candidate = {
         "amount": edited_amount,
         "category": edited_category,
         "expense_date": edited_date.isoformat(),
         "description": edited_description.strip(),
         "establishment": edited_establishment.strip() or None,
     }
+    try:
+        return validate_expense_data(candidate, reference_date=local_today())
+    except ExpenseValidationError as exc:
+        st.error(str(exc))
+        return None
 
 
-def open_history_from_category(year: int, months: list[int], view_mode: str) -> None:
+def open_history_from_category() -> None:
     chart_state = st.session_state.get("category_chart")
     if not chart_state:
         return
+
     selection = chart_state.get("selection", {}).get("category_select", {})
     categories = selection.get("categoria", [])
     if not categories:
         return
+
+    year = st.session_state.get("_drill_year", local_today().year)
+    months = st.session_state.get("_drill_months", [])
+    view_mode = st.session_state.get("_drill_view_mode", "Mensal")
 
     st.session_state["main_tabs"] = "📋 Histórico"
     st.session_state["history_year"] = year
@@ -193,10 +200,11 @@ with tab_chat:
                 confirm, edit, cancel = st.columns(3)
                 if confirm.button("Confirmar e salvar", type="primary", use_container_width=True):
                     draft["category"] = draft.get("category") or "Outros"
-                    saved_expense = add_expense(
-                        draft,
-                        raw_text=" | ".join(st.session_state.raw_messages),
-                    )
+                    try:
+                        saved_expense = add_expense(draft)
+                    except ExpenseValidationError as exc:
+                        st.error(str(exc))
+                        st.stop()
                     current_df = expenses_to_dataframe(list_expenses())
                     current_anomalies = detect_anomalies(current_df)
                     is_anomaly = (
@@ -272,16 +280,6 @@ with tab_chat:
             st.session_state.anomaly_alert_id = None
             st.session_state.anomaly_edit_id = None
         else:
-            alert_df = expenses_to_dataframe(alert_expenses)
-            alert_anomalies = detect_anomalies(alert_df)
-            alert_row = (
-                alert_anomalies[
-                    alert_anomalies["id"].astype(int) == alert_expense.id
-                ]
-                if not alert_anomalies.empty and "id" in alert_anomalies.columns
-                else alert_anomalies
-            )
-
             with st.chat_message("assistant"):
                 st.warning(
                     f"**Gasto fora do seu padrão**\n\n"
@@ -350,7 +348,6 @@ with tab_chat:
 
     if user_text:
         st.session_state.chat_messages.append({"role": "user", "content": user_text})
-        st.session_state.raw_messages.append(user_text)
 
         try:
             updated = extract_expense_turn(
@@ -383,7 +380,7 @@ expenses = list_expenses()
 df = expenses_to_dataframe(expenses)
 
 with tab_dashboard:
-    today = date.today()
+    today = local_today()
     month_names = {
         1: "Janeiro", 2: "Fevereiro", 3: "Março", 4: "Abril",
         5: "Maio", 6: "Junho", 7: "Julho", 8: "Agosto",
@@ -403,14 +400,12 @@ with tab_dashboard:
         category_option = f3.selectbox("Categoria", ["Todas"] + CATEGORIES)
         selected_category = None if category_option == "Todas" else category_option
         info = period_insights(df, year, selected_months, selected_category)
-        statement = filter_expenses_by_months(df, year, selected_months, selected_category)
     else:
         f1, f2 = st.columns(2)
         year = int(f1.number_input("Ano", 2020, 2100, today.year, key="annual_year"))
         category_option = f2.selectbox("Categoria", ["Todas"] + CATEGORIES, key="annual_category")
         selected_category = None if category_option == "Todas" else category_option
         info = annual_insights(df, year, selected_category)
-        statement = filter_expenses_by_year(df, year, selected_category)
 
     # O total do período é o indicador principal; comparações ficam como contexto.
     if view_mode == "Mensal" and len(selected_months) == 1:
@@ -484,13 +479,15 @@ with tab_dashboard:
             },
         }
         chart_months = selected_months if view_mode == "Mensal" else []
+        st.session_state["_drill_year"] = year
+        st.session_state["_drill_months"] = chart_months
+        st.session_state["_drill_view_mode"] = view_mode
         st.vega_lite_chart(
             category_chart_data,
             chart_spec,
             use_container_width=True,
             key="category_chart",
             on_select=open_history_from_category,
-            args=(year, chart_months, view_mode),
         )
         st.caption("Clique em uma categoria para abrir os lançamentos no Histórico.")
 
@@ -565,12 +562,12 @@ with tab_history:
     else:
         h1, h2, h3 = st.columns(3)
         history_year = int(
-            h1.number_input("Ano", 2020, 2100, date.today().year, key="history_year")
+            h1.number_input("Ano", 2020, 2100, local_today().year, key="history_year")
         )
         history_month = h2.selectbox(
             "Mês",
             options=[0] + list(month_names),
-            index=date.today().month,
+            index=local_today().month,
             format_func=lambda month_number: (
                 "Todos os meses"
                 if month_number == 0
