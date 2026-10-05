@@ -1,12 +1,10 @@
-from datetime import date, timedelta
+from datetime import date
 
 from google import genai
 
 from src.config import CATEGORIES, GEMINI_API_KEY, GEMINI_MODEL
-
-MAX_DESCRIPTION_LENGTH = 200
-MAX_ESTABLISHMENT_LENGTH = 120
-MAX_FUTURE_DAYS = 1
+from src.time_utils import local_today
+from src.validation import ExpenseValidationError, validate_expense_data
 
 TOOL = {
     "type": "function",
@@ -33,46 +31,14 @@ class ExtractionError(ValueError):
 
 
 def _validate_partial(data: dict, reference_date: date | None = None) -> dict:
-    today = reference_date or date.today()
-    result = {
-        "amount": data.get("amount"),
-        "category": data.get("category"),
-        "expense_date": data.get("expense_date"),
-        "description": data.get("description"),
-        "establishment": data.get("establishment"),
-    }
-
-    if result["amount"] is not None:
-        try:
-            result["amount"] = round(float(result["amount"]), 2)
-        except (TypeError, ValueError) as exc:
-            raise ExtractionError("O valor retornado pela IA é inválido.") from exc
-        if result["amount"] <= 0:
-            raise ExtractionError("O valor da despesa deve ser maior que zero.")
-
-    if result["category"] is not None and result["category"] not in CATEGORIES:
-        raise ExtractionError("A categoria retornada não é válida.")
-
-    if result["expense_date"] is not None:
-        try:
-            parsed_date = date.fromisoformat(result["expense_date"])
-        except (TypeError, ValueError) as exc:
-            raise ExtractionError("A data retornada pela IA é inválida.") from exc
-        if parsed_date > today + timedelta(days=MAX_FUTURE_DAYS):
-            raise ExtractionError("A data da despesa está muito distante no futuro.")
-        result["expense_date"] = parsed_date.isoformat()
-
-    if result["description"] is not None:
-        result["description"] = str(result["description"]).strip() or None
-        if result["description"] and len(result["description"]) > MAX_DESCRIPTION_LENGTH:
-            raise ExtractionError(f"A descrição deve ter no máximo {MAX_DESCRIPTION_LENGTH} caracteres.")
-
-    if result["establishment"] is not None:
-        result["establishment"] = str(result["establishment"]).strip() or None
-        if result["establishment"] and len(result["establishment"]) > MAX_ESTABLISHMENT_LENGTH:
-            raise ExtractionError(f"O estabelecimento deve ter no máximo {MAX_ESTABLISHMENT_LENGTH} caracteres.")
-
-    return result
+    try:
+        return validate_expense_data(
+            data,
+            reference_date=reference_date or local_today(),
+            partial=True,
+        )
+    except ExpenseValidationError as exc:
+        raise ExtractionError(str(exc)) from exc
 
 
 def merge_expense_data(previous: dict | None, new: dict) -> dict:
@@ -109,7 +75,7 @@ def extract_expense_turn(
     if not GEMINI_API_KEY:
         raise ExtractionError("GEMINI_API_KEY não configurada.")
 
-    today = reference_date or date.today()
+    today = reference_date or local_today()
     context = previous_data or {}
     prompt = (
         "Você ajuda a estruturar UMA despesa pessoal por vez em português do Brasil.\n"
@@ -131,6 +97,7 @@ def extract_expense_turn(
         model=GEMINI_MODEL,
         input=prompt,
         tools=[TOOL],
+        store=False,
         generation_config={
             "tool_choice": {
                 "allowed_tools": {"mode": "any", "tools": ["analisar_despesa"]}
