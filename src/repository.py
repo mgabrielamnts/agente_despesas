@@ -9,7 +9,7 @@ from src.time_utils import local_today
 from src.validation import validate_expense_data
 
 
-def add_expense(data: dict, raw_text: str | None = None) -> Expense:
+def add_expense(data: dict) -> Expense:
     validated = validate_expense_data(data, reference_date=local_today())
     expense = Expense(
         amount=Decimal(str(validated["amount"])),
@@ -17,7 +17,6 @@ def add_expense(data: dict, raw_text: str | None = None) -> Expense:
         expense_date=date.fromisoformat(validated["expense_date"]),
         description=validated["description"],
         establishment=validated.get("establishment"),
-        raw_text=raw_text,
     )
     with SessionLocal() as session:
         try:
