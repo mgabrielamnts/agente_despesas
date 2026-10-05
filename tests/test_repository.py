@@ -37,7 +37,7 @@ def expense_data():
 
 
 def test_repository_crud_with_in_memory_sqlite(memory_session):
-    created = repository.add_expense(expense_data(), raw_text="gastei 42,50 no almoço")
+    created = repository.add_expense(expense_data())
     assert created.id is not None
 
     expenses = repository.list_expenses()
@@ -70,10 +70,19 @@ def test_anomaly_review_is_persisted(memory_session):
 
 
 def test_migrates_old_bills_category(memory_session):
-    data = {**expense_data(), "category": "Contas"}
-    created = repository.add_expense(data)
+    with memory_session() as session:
+        legacy = Expense(
+            amount=42.50,
+            category="Contas",
+            expense_date=date(2026, 10, 3),
+            description="Conta antiga",
+        )
+        session.add(legacy)
+        session.commit()
+        legacy_id = legacy.id
+
     repository.migrate_category_labels()
-    migrated = next(e for e in repository.list_expenses() if e.id == created.id)
+    migrated = next(e for e in repository.list_expenses() if e.id == legacy_id)
     assert migrated.category == "Contas pessoais"
 
 
